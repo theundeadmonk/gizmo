@@ -231,7 +231,13 @@ func (r *RPCServer) safelyExecuteHTTPRequest(w http.ResponseWriter, req *http.Re
 	}()
 
 	// hand the request off to gorilla
-	r.mux.ServeHTTP(w, req)
+	var h http.Handler
+	h = r.mux
+	if r.cfg.Middleware != nil {
+		h = r.cfg.Middleware(h)
+	}
+	h.ServeHTTP(w, req)
+
 }
 
 // LogRPCWithFields will feed any request context into a logrus Entry.

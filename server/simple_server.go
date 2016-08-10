@@ -97,8 +97,12 @@ func (s *SimpleServer) safelyExecuteRequest(w http.ResponseWriter, r *http.Reque
 		}
 	}()
 
-	// hand the request off to gorilla
-	s.mux.ServeHTTP(w, r)
+	var h http.Handler
+	h = s.mux
+	if s.cfg.Middleware != nil {
+		h = s.cfg.Middleware(h)
+	}
+	h.ServeHTTP(w, r)
 }
 
 // Start will start the SimpleServer at it's configured address.

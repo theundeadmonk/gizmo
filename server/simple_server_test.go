@@ -365,8 +365,7 @@ func (s *testMixedService) Endpoints() map[string]map[string]http.HandlerFunc {
 }
 
 func (s *testMixedService) GetSimple(w http.ResponseWriter, r *http.Request) {
-	something := web.Vars(r)["something"]
-	fmt.Fprint(w, something)
+	fmt.Fprint(w, "ok")
 }
 
 func (s *testMixedService) GetJSON(r *http.Request) (int, interface{}, error) {
@@ -400,6 +399,54 @@ func TestFactory(*testing.T) {
 
 	// without config:
 	NewSimpleServer(nil)
+}
+
+func TestServerMiddleware(t *testing.T) {
+	var counter int
+	cfg := &Config{
+		Middleware: func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				counter++
+				h.ServeHTTP(w, r)
+			})
+		},
+	}
+	s := NewSimpleServer(cfg)
+	if err := s.Register(&testMixedService{}); err != nil {
+		t.Errorf("unable to register mixed service: %s\n", err)
+	}
+
+	// request known endpoint
+	r, _ := http.NewRequest("GET", "/svc/v1/simple", nil)
+	w := httptest.NewRecorder()
+
+	s.ServeHTTP(w, r)
+
+	// verify our counter got hit!
+	if counter != 1 {
+		t.Errorf("expected counter in server middleare to be 1, got %d", counter)
+	}
+
+	// verify we got our expected "ok" response
+	if w.Body.String() != "ok" {
+		t.Errorf("expected response body of 'ok', got %q", w.Body.String())
+	}
+
+	if w.Code != 200 {
+		t.Errorf("expected response code of '200', got %d", w.Code)
+	}
+
+	// request a random-unregister endpoint
+	r, _ = http.NewRequest("GET", "/svc/v1/something/else", nil)
+	w = httptest.NewRecorder()
+
+	s.ServeHTTP(w, r)
+
+	// verify our counter got hit!
+	if counter != 2 {
+		t.Errorf("expected counter in server middleware to be 2, got %d", counter)
+	}
+
 }
 
 func TestBasicRegistration(t *testing.T) {

@@ -20,6 +20,12 @@ type Config struct {
 	// empty, this will default to 'simple'.
 	ServerType string `envconfig:"GIZMO_SERVER_TYPE"`
 
+	// Middleware will be used at the highest level of the Server implementation
+	// before handing off the request to the Router. This can be handy for CORS, Access Logging
+	// or other middlewares that need to apply to all requests, including endpoints that are not
+	// registered with the Router.
+	Middleware func(http.Handler) http.Handler
+
 	// HealthCheckType is used by server to init the proper HealthCheckHandler.
 	// If empty, this will default to 'simple'.
 	HealthCheckType string `envconfig:"GIZMO_HEALTH_CHECK_TYPE"`
