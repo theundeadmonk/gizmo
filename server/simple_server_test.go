@@ -420,3 +420,33 @@ func TestBasicRegistration(t *testing.T) {
 		t.Error("Invalid services should produce an error in service registration")
 	}
 }
+
+func TestRegistration(t *testing.T) {
+
+	tests := []struct {
+		svc Service
+		url string
+	}{
+		{
+			&testMixedService{},
+			"/svc/v1/simple",
+		},
+	}
+
+	for _, test := range tests {
+
+		s := NewSimpleServer(nil)
+
+		if err := s.Register(test.svc); err != nil {
+			t.Errorf("Basic registration of services should not encounter an error: %s\n", err)
+		}
+
+		r, _ := http.NewRequest(http.MethodGet, test.url, nil)
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+
+		// check count
+		//s.counters[test.url+".STATUS-COUNT"].
+		// check time
+	}
+}

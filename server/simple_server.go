@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/go-kit/kit/metrics"
 	"github.com/go-kit/kit/metrics/provider"
@@ -24,6 +25,8 @@ import (
 type SimpleServer struct {
 	cfg *Config
 
+	svc Service
+
 	// exit chan for graceful shutdown
 	exit chan chan error
 
@@ -36,6 +39,9 @@ type SimpleServer struct {
 	// for collecting metrics
 	mets         provider.Provider
 	panicCounter metrics.Counter
+
+	statusCounters map[string]*CounterByStatusXX
+	timers         map[string]metrics.TimeHistogram
 }
 
 // NewSimpleServer will init the mux, exit channel and
@@ -52,12 +58,14 @@ func NewSimpleServer(cfg *Config) *SimpleServer {
 
 	mets := newMetricsProvider(cfg)
 	return &SimpleServer{
-		mux:          mx,
-		cfg:          cfg,
-		exit:         make(chan chan error),
-		monitor:      NewActivityMonitor(),
-		mets:         mets,
-		panicCounter: mets.NewCounter("panic", "counting any server panics"),
+		mux:            mx,
+		cfg:            cfg,
+		exit:           make(chan chan error),
+		monitor:        NewActivityMonitor(),
+		mets:           mets,
+		panicCounter:   mets.NewCounter("panic", "counting any server panics"),
+		statusCounters: map[string]*CounterByStatusXX{},
+		timers:         map[string]metrics.TimeHistogram{},
 	}
 }
 
@@ -97,8 +105,22 @@ func (s *SimpleServer) safelyExecuteRequest(w http.ResponseWriter, r *http.Reque
 		}
 	}()
 
-	// hand the request off to gorilla
-	s.mux.ServeHTTP(w, r)
+	// setup for metrics
+	start := time.Now()
+	mw := newMetricsResponseWriter(w)
+
+	// hand the request off to middleware and then gorilla
+	s.svc.Middleware(s.mux).ServeHTTP(mw, r)
+
+	// grab the metrics endpoint name from context
+	name := web.Vars(r)["endpointName"]
+	// update the metrics for this endpoint
+	if counter, ok := s.statusCounters[name]; ok {
+		counter.Add(mw.StatusCode)
+	}
+	if timer, ok := s.timers[name]; ok {
+		timer.Observe(time.Since(start))
+	}
 }
 
 // Start will start the SimpleServer at it's configured address.
@@ -201,6 +223,8 @@ func metricName(prefix, path, method string) string {
 
 // Register will accept and register SimpleServer, JSONService or MixedService implementations.
 func (s *SimpleServer) Register(svcI Service) error {
+	s.svc = svcI
+
 	prefix := svcI.Prefix()
 	// quick fix for backwards compatibility
 	prefix = strings.TrimRight(prefix, "/")
@@ -234,8 +258,11 @@ func (s *SimpleServer) Register(svcI Service) error {
 		for path, epMethods := range ss.Endpoints() {
 			for method, ep := range epMethods {
 				endpointName := metricName(prefix, path, method)
+				s.timers[endpointName] = NewNamedTimer(endpointName+".DURATION", s.mets)
+				s.statusCounters[endpointName] = CountedByStatusXX(nil, endpointName+".STATUS-COUNT", s.mets)
+
 				// set the function handle and register it to metrics
-				s.mux.Handle(method, prefix+path, Timed(CountedByStatusXX(
+				s.mux.Handle(method, prefix+path,
 					func(ep http.HandlerFunc, ss SimpleService) http.Handler {
 						return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 							// is it worth it to always close this?
@@ -248,11 +275,13 @@ func (s *SimpleServer) Register(svcI Service) error {
 							}
 
 							// call the func and return err or not
-							ss.Middleware(ep).ServeHTTP(w, r)
+							ep.ServeHTTP(w, r)
+
+							vars := web.Vars(r)
+							vars["endpointName"] = endpointName
+							web.SetRouteVars(r, vars)
 						})
 					}(ep, ss),
-					endpointName+".STATUS-COUNT", s.mets),
-					endpointName+".DURATION", s.mets),
 				)
 			}
 		}
@@ -263,11 +292,28 @@ func (s *SimpleServer) Register(svcI Service) error {
 		for path, epMethods := range js.JSONEndpoints() {
 			for method, ep := range epMethods {
 				endpointName := metricName(prefix, path, method)
-				// set the function handle and register it to metrics
-				s.mux.Handle(method, prefix+path, Timed(CountedByStatusXX(
-					js.Middleware(JSONToHTTP(js.JSONMiddleware(ep))),
-					endpointName+".STATUS-COUNT", s.mets),
-					endpointName+".DURATION", s.mets),
+				s.timers[endpointName] = NewNamedTimer(endpointName+".DURATION", s.mets)
+				s.statusCounters[endpointName] = CountedByStatusXX(nil, endpointName+".STATUS-COUNT", s.mets)
+
+				s.mux.Handle(method, prefix+path,
+					func(ep JSONEndpoint, js JSONService) http.Handler {
+						return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							if r.Body != nil {
+								defer func() {
+									if err := r.Body.Close(); err != nil {
+										Log.Warn("unable to close request body: ", err)
+									}
+								}()
+							}
+
+							JSONToHTTP(js.JSONMiddleware(ep)).ServeHTTP(w, r)
+
+							vars := web.Vars(r)
+							Log.Debug("ADDING ENDPOINT NAME: ", endpointName)
+							vars["endpointName"] = endpointName
+							web.SetRouteVars(r, vars)
+						})
+					}(ep, js),
 				)
 			}
 		}
@@ -278,11 +324,12 @@ func (s *SimpleServer) Register(svcI Service) error {
 		for path, epMethods := range cs.ContextEndpoints() {
 			for method, ep := range epMethods {
 				endpointName := metricName(prefix, path, method)
-				// set the function handle and register it to metrics
-				s.mux.Handle(method, prefix+path, Timed(CountedByStatusXX(
+				s.timers[endpointName] = NewNamedTimer(endpointName+".DURATION", s.mets)
+				s.statusCounters[endpointName] = CountedByStatusXX(nil, endpointName+".STATUS-COUNT", s.mets)
+
+				s.mux.Handle(method, prefix+path,
 					func(ep ContextHandlerFunc, cs ContextService) http.Handler {
 						return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-							// is it worth it to always close this?
 							if r.Body != nil {
 								defer func() {
 									if err := r.Body.Close(); err != nil {
@@ -291,12 +338,13 @@ func (s *SimpleServer) Register(svcI Service) error {
 								}()
 							}
 							ctx := netContext.Background()
-							// call the func and return err or not
-							cs.Middleware(ContextToHTTP(ctx, cs.ContextMiddleware(ep))).ServeHTTP(w, r)
+							ContextToHTTP(ctx, cs.ContextMiddleware(ep)).ServeHTTP(w, r)
+
+							vars := web.Vars(r)
+							vars["endpointName"] = endpointName
+							web.SetRouteVars(r, vars)
 						})
 					}(ep, cs),
-					endpointName+".STATUS-COUNT", s.mets),
-					endpointName+".DURATION", s.mets),
 				)
 			}
 		}
@@ -307,15 +355,31 @@ func (s *SimpleServer) Register(svcI Service) error {
 		for path, epMethods := range mcs.JSONEndpoints() {
 			for method, ep := range epMethods {
 				endpointName := metricName(prefix, path, method)
-				// set the function handle and register it to metrics
-				s.mux.Handle(method, prefix+path, Timed(CountedByStatusXX(
-					mcs.Middleware(ContextToHTTP(netContext.Background(),
-						mcs.ContextMiddleware(
-							JSONContextToHTTP(mcs.JSONContextMiddleware(ep)),
-						),
-					)),
-					endpointName+".STATUS-COUNT", s.mets),
-					endpointName+".DURATION", s.mets),
+				s.timers[endpointName] = NewNamedTimer(endpointName+".DURATION", s.mets)
+				s.statusCounters[endpointName] = CountedByStatusXX(nil, endpointName+".STATUS-COUNT", s.mets)
+
+				s.mux.Handle(method, prefix+path,
+					func(ep JSONContextEndpoint, js JSONService) http.Handler {
+						return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							if r.Body != nil {
+								defer func() {
+									if err := r.Body.Close(); err != nil {
+										Log.Warn("unable to close request body: ", err)
+									}
+								}()
+							}
+
+							ContextToHTTP(netContext.Background(),
+								mcs.ContextMiddleware(
+									JSONContextToHTTP(mcs.JSONContextMiddleware(ep)),
+								),
+							).ServeHTTP(w, r)
+
+							vars := web.Vars(r)
+							vars["endpointName"] = endpointName
+							web.SetRouteVars(r, vars)
+						})
+					}(ep, js),
 				)
 			}
 		}

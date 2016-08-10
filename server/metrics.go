@@ -89,13 +89,17 @@ func CountedByStatusXX(handler http.Handler, name string, p provider.Provider) *
 func (c *CounterByStatusXX) ServeHTTP(w0 http.ResponseWriter, r *http.Request) {
 	w := newMetricsResponseWriter(w0)
 	c.handler.ServeHTTP(w, r)
-	if w.StatusCode < 200 {
+	c.Add(w.StatusCode)
+}
+
+func (c *CounterByStatusXX) Add(code int) {
+	if code < 200 {
 		c.counter1xx.Add(1)
-	} else if w.StatusCode < 300 {
+	} else if code < 300 {
 		c.counter2xx.Add(1)
-	} else if w.StatusCode < 400 {
+	} else if code < 400 {
 		c.counter3xx.Add(1)
-	} else if w.StatusCode < 500 {
+	} else if code < 500 {
 		c.counter4xx.Add(1)
 	} else {
 		c.counter5xx.Add(1)
@@ -108,10 +112,7 @@ type Timer struct {
 	handler http.Handler
 }
 
-// Timed returns an http.Handler that starts a timer, passes requests to an
-// underlying http.Handler, stops the timer, and updates the timer via
-// go-kit/kit/metrics.
-func Timed(handler http.Handler, name string, p provider.Provider) *Timer {
+func NewNamedTimer(name string, p provider.Provider) metrics.TimeHistogram {
 	hist, err := p.NewHistogram(name,
 		fmt.Sprintf("tracking request duration for %q", name),
 		0, 1500000, 4, // 0-15 minute time range, 4 sigfigs
@@ -120,8 +121,15 @@ func Timed(handler http.Handler, name string, p provider.Provider) *Timer {
 		panic("invalid histogram settings")
 	}
 
+	return metrics.NewTimeHistogram(time.Millisecond, hist)
+}
+
+// Timed returns an http.Handler that starts a timer, passes requests to an
+// underlying http.Handler, stops the timer, and updates the timer via
+// go-kit/kit/metrics.
+func Timed(handler http.Handler, name string, p provider.Provider) *Timer {
 	return &Timer{
-		TimeHistogram: metrics.NewTimeHistogram(time.Millisecond, hist),
+		TimeHistogram: NewNamedTimer(name, p),
 		handler:       handler,
 	}
 }
