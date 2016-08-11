@@ -62,7 +62,7 @@ func (m *Config) String() string {
 // LoadConfigFromEnv will attempt to load a Postgresql object
 // from environment variables. If not populated, nil
 // is returned
-func LoadCOnfigFromEnv() *Config {
+func LoadConfigFromEnv() *Config {
 	var postgres Config
 	config.LoadEnvConfig(&postgres)
 	if postgres.Host != "" {
