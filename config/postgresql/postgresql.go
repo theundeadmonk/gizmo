@@ -30,7 +30,7 @@ const (
 // Users must import a postgresql driver in their
 // main to use this.
 func (p *Config) DB() (*sql.DB, error) {
-	db, err := sql.Open("postgres", m.String())
+	db, err := sql.Open("postgres", p.String())
 	if err != nil {
 		return db, err
 	}
