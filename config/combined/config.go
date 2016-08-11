@@ -13,6 +13,7 @@ import (
 	awsps "github.com/NYTimes/gizmo/pubsub/aws"
 	"github.com/NYTimes/gizmo/pubsub/kafka"
 	"github.com/NYTimes/gizmo/server"
+	"github.com/theundeadmonk/gizmo/config/postgresql"
 )
 
 // Config is a generic struct to hold information for applications that
@@ -33,6 +34,8 @@ type Config struct {
 	Kafka *kafka.Config
 
 	Oracle oracle.Config
+
+	Postgresql *postgresql.Config
 
 	MySQL      *mysql.Config
 	MySQLSlave *mysql.Config
@@ -71,6 +74,7 @@ func LoadConfigFromEnv() *Config {
 	app.MongoDB = mongodb.LoadConfigFromEnv()
 	app.Kafka = kafka.LoadConfigFromEnv()
 	app.MySQL = mysql.LoadConfigFromEnv()
+	app.Postgresql = postgresql.LoadConfigFromEnv()
 	app.Oracle = oracle.LoadConfigFromEnv()
 	app.Cookie = cookie.LoadConfigFromEnv()
 	app.Server = server.LoadConfigFromEnv()
