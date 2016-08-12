@@ -40,7 +40,7 @@ func (p *Config) DB() (*sql.DB, error) {
 // String will return the Postgresql connection string
 func (m *Config) String() string {
 	if m.Port == 0 {
-		m.Port = url.QueryEscape(DefaultPort)
+		m.Port = DefaultPort
 	}
 
 	if m.SSLMode != "" {
@@ -49,7 +49,7 @@ func (m *Config) String() string {
 		m.SSLMode = url.QueryEscape(DefaultSSLMode)
 	}
 
-	return fmt.Sprintf("postgres://%s:%s@%s:%i/%s?sslmode=%s",
+	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		m.User,
 		m.Pw,
 		m.Host,
