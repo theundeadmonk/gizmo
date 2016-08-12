@@ -40,7 +40,7 @@ func (p *Config) DB() (*sql.DB, error) {
 // String will return the Postgresql connection string
 func (m *Config) String() string {
 	if m.Port == 0 {
-		m.Port = DefaultPort
+		m.Port = url.QueryEscape(DefaultPort)
 	}
 
 	if m.SSLMode != "" {
